@@ -1,12 +1,12 @@
-function [ conc, time_vector, fig ] = CalcNIRS(dataFile, SDS, tissueType, plotChannelIdx, extinctionCoefficientsFile, DPFperTissueFile, relDPFfile )
+function [ conc, time_vector, fig , substanceNames] = CalcNIRS(dataFile, SDS, tissueType, plotChannelIdx, extinctionCoefficientsFile, DPFperTissueFile, relDPFfile )
 %% CalcNIRS - calculate and plot HbR HbO 
 % Input:
 %   dataFile - .mat file with intensity data.
-%              it can have two possible formats
+%              it can have two possible formats, that will contain two "channels" 
 %              (a) 'intensity1' and 'intensity2' fields
 %              (b) 'cam1' and 'cam2' fields , each one has 'intensity' subfield 
-%
-%  SDS  - Sourse-Detector Separation distance in cm. 2x1 value corresponding to cam1 and cam2
+%                
+%  SDS  - Sourse-Detector Separation distance in cm. Value for each channel ( 2x1 vector corresponding to cam1 and cam2 )
 %  tissueType - one of the rows in DPFperTissueFile (for example 'adult_forearm' \ 'baby_head' \ 'adult_head' \ 'adult_leg' )
 %               default = 'adult_head'
 %  plotChannelIdx - vector with numbers in the range of [1-2] indicating channels to plot. If empty - none is plotted. (default = [])
@@ -20,12 +20,12 @@ function [ conc, time_vector, fig ] = CalcNIRS(dataFile, SDS, tissueType, plotCh
 %              default = '.\RelativeDPFCoefficients.csv'   (if not passed or empty)     
 %
 % Output :
-%   conc - cell array (cell for each channel) with concentration matrix ( rows : HbO2 HbR oxCCO)
-%   time_vector - accorgin to the first wavelength , in [seconds]
+%   conc - cell array (cell for each channel) with concentration matrix ( rows : HbO2 HbR oxCCO redCCO)
+%   time_vector - accorgin to the first wavelength in data file , in [seconds]
 %   fig  - handle to figure. Empty if plotChannelIdx==[].
 %
 %% Check User Input
-if ~exist('tissueType','var')
+if ~exist('tissueType','var') || isempty(tissueType)
     tissueType = 'adult_head';
 end
 
@@ -106,10 +106,11 @@ wavelength_of_DPFdata = sscanf(line,'%%%*[^0123456789]%d');
 
 % 3. Relative coefficient - depending on the wavelength
 tblDPFrel = readtable(relDPFfile);
-DPFrel = nan(sizewavelength(wavelengths));
+DPFrel = nan(numel(wavelengths),1);
 for wi = 1:numel(wavelengths)
-    DPFrel(wi) = tblDPFrel.relDPFcoeff(tblDPFrel.wavelength==wavelengths(wi) ) / tblDPFrel.relDPFcoeff(tblDPFrel.wavelength==wavelength_of_DPFdata);
+    DPFrel(wi) = tblDPFrel.relDPFcoeff(tblDPFrel.wavelength==wavelengths(wi) )/ tblDPFrel.relDPFcoeff(tblDPFrel.wavelength==wavelength_of_DPFdata);
 end
+
 % 4. total effective pathlength
 Leff = DPFbase * DPFrel * SDS; % mattix with Leff for each wavelength(rows) for each channel(columns)
 
@@ -118,7 +119,7 @@ tblExtCoeff = readtable(extinctionCoefficientsFile);
 
 %% Calc
   % init
-  time_vector   = Data.time(1,:)';
+  time_vector   = Data.time(1,:);
   
   % Create extinction coefficients matrix
   wavelength_idx = nan(size(wavelengths));
@@ -126,12 +127,12 @@ tblExtCoeff = readtable(extinctionCoefficientsFile);
       wavelength_idx(wi) = find(tblExtCoeff.wavelength==wavelengths(wi) );      
   end
   
-  plotMaterials = {'HbO2','HHb','diffCCO'};
-  colors        = {'r','b',[0 0.8 0]};
+  substanceNames = {'HbO2','HHb','oxCCO','redCCO'};
+  colors        = {'r','b',[0 0.8 0],'y'};
 
   extCoeffMat = []; 
-  for mi = 1:numel(plotMaterials)
-        extCoeffMat = [ extCoeffMat , tblExtCoeff.(plotMaterials{mi})(wavelength_idx)]; %#ok<AGROW>
+  for mi = 1:numel(substanceNames)
+        extCoeffMat = [ extCoeffMat , tblExtCoeff.(substanceNames{mi})(wavelength_idx)]; %#ok<AGROW>
   end
 
   idx_reftime = 1;      
@@ -155,45 +156,54 @@ tblExtCoeff = readtable(extinctionCoefficientsFile);
       % Calculate concentration  
       conc{ch_i} =  pinv(extCoeffMat) * atten_div_Leff ;
   end
-  save('Debug1.mat','atten_div_Leff','extCoeffMat','conc')
+  zero_idx = time_vector == 0;
+  time_vector(zero_idx) = [];
+  for ch=1:numel(conc)
+      conc{ch}(:,zero_idx) = [];
+  end
+  
+  save('DebugVika.mat'); %,'atten_div_Leff','extCoeffMat','conc','time_vector')
 
 %% Plot
-fig = figure('name',recordName,'Units','normalized','Position',[0.25      0.3      0.6   0.5]); 
-plot_idx = 1;
-for ch_i = plotChannelIdx(:)'
-    subplot(numel(plotChannelIdx),1,plot_idx); plot_idx = plot_idx + 1;
-    for mi = 1:numel(plotMaterials)
-        plot(time_vector/60,conc{ch_i}(mi,:)*1e6,'-','color',colors{mi}); hold on;
-    end   
-    xlabel('time [min]');
-    ylabel('\Delta[\muM]');
-    legend(plotMaterials,'interpreter','none');
-    title(sprintf('%s - SDS %g cm',recordName,SDS(ch_i)));
-    grid on;
-    
-    ylims = get(gca,'YLim');
-    
-    if exist('info','var') && isfield(info,['DU_per_Pixel' num2str(ch_i)])
-        text(5,ylims(1)+diff(ylims)*0.2,[ '<I> = ' num2str(round( info.(['DU_per_Pixel' num2str(ch_i)]))) ' DU'] )
-    end
-end
-
-% plot timing of the events    
-events = ParseTiming(dataFile);
-if ~isempty(fieldnames(events))
+if ~isempty(plotChannelIdx)
+    fig = figure('name',recordName,'Units','normalized','Position',[0.25      0.3      0.6   0.5]); 
     plot_idx = 1;
     for ch_i = plotChannelIdx(:)'
         subplot(numel(plotChannelIdx),1,plot_idx); plot_idx = plot_idx + 1;
-        ylims = get(gca,'YLim');
-        for k=1:numel(events)
-            plot(events(k).min*[1 1], ylims,'-k');
-            text(events(k).min+1,ylims(2)*0.8,events(k).name,'Rotation',-90,'Clipping','on','FontSize',12)
-        end
-        set(gca,'YLim',ylims);
-        legend(plotMaterials,'interpreter','none');        
-    end
-end
+        for mi = 1:numel(substanceNames)
+            plot(time_vector/60,conc{ch_i}(mi,:)*1e6,'-','color',colors{mi}); hold on;
+        end   
+        xlabel('time [min]');
+        ylabel('\Delta[\muM]');
+        legend(substanceNames,'interpreter','none');
+        title(sprintf('%s - SDS %g cm',recordName,SDS(ch_i)));
+        grid on;
 
+        ylims = get(gca,'YLim');
+
+        if exist('info','var') && isfield(info,['DU_per_Pixel' num2str(ch_i)])
+            text(5,ylims(1)+diff(ylims)*0.2,[ '<I> = ' num2str(round( info.(['DU_per_Pixel' num2str(ch_i)]))) ' DU'] )
+        end
+    end
+
+    % plot timing of the events    
+    events = ParseTiming(dataFile);
+    if ~isempty(fieldnames(events))
+        plot_idx = 1;
+        for ch_i = plotChannelIdx(:)'
+            subplot(numel(plotChannelIdx),1,plot_idx); plot_idx = plot_idx + 1;
+            ylims = get(gca,'YLim');
+            for k=1:numel(events)
+                plot(events(k).min*[1 1], ylims,'-k');
+                text(events(k).min+1,ylims(2)*0.8,events(k).name,'Rotation',-90,'Clipping','on','FontSize',12)
+            end
+            set(gca,'YLim',ylims);
+            legend(substanceNames,'interpreter','none');        
+        end
+    end
+else
+    fig = [];
+end
 
 function events = ParseTiming(dataFile)
 events = struct();
