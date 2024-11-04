@@ -5,7 +5,7 @@ recordsDir = dir([ recordsFolder 'Laser*']);
 records = strcat(recordsFolder, {recordsDir.name})';
 
 %%
-prefix = '\results1\oxCCO_redCCO_';
+prefix = '\results2\oxCCO_redCCO_';
 figs = nan(size(numel(records)));
 for ri = 1:numel(records)
     [conc, time_vector,figs(ri),substanceNames] = CalcNIRS([records{ri} '\results.mat'], [3,1],'adult_head',1:2);
